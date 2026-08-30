@@ -50,8 +50,7 @@ Logs:
 docker compose logs -f
 ```
 
-State (which tracks are still within their grace period) is kept in `data/state.json`,
-persisted on the host via the bind mount, so restarts don't lose track of pending items.
+State, e.g. which tracks are still within their grace period, is kept in `data/state.json`.
 
 ## Notes
 - The OAuth token refreshes itself indefinitely as long as the refresh token stays valid, so it usually lasts forever.

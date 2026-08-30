@@ -10,7 +10,7 @@ from google.auth.transport.requests import Request
 
 PLAYLIST_A_ID = os.environ["PLAYLIST_A_ID"]
 PLAYLIST_B_ID = os.environ["PLAYLIST_B_ID"]
-YTM_COOKIE = os.environ["YTM_COOKIE"]
+YTM_COOKIE = os.environ.get("YTM_COOKIE", "")
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 MIN_RETENTION_HOURS = float(os.environ.get("MIN_RETENTION_HOURS", "24"))
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
@@ -26,9 +26,11 @@ BASE_HEADERS = {
     "content-type": "application/json",
     "origin": "https://music.youtube.com",
     "x-origin": "https://music.youtube.com",
-    "x-goog-authuser": "0",
-    "cookie": YTM_COOKIE,
+    "x-goog-authuser": "0"
 }
+
+if YTM_COOKIE:
+    BASE_HEADERS["cookie"] = YTM_COOKIE
 
 CONTEXT = {
     "client": {
@@ -48,7 +50,8 @@ def _sapisid_hash():
 
 def _ytm_post(endpoint, body, params=None):
     headers = dict(BASE_HEADERS)
-    headers["authorization"] = _sapisid_hash()
+    if YTM_COOKIE:
+        headers["authorization"] = _sapisid_hash()
     response = session.post(
         f"https://music.youtube.com/youtubei/v1/{endpoint}",
         params={"alt": "json", **(params or {})},
