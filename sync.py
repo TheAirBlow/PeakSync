@@ -5,6 +5,7 @@ import hashlib
 import datetime
 import requests
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
@@ -110,16 +111,19 @@ def load_credentials():
             f.write(creds.to_json())
     return creds
 
-def list_playlist_b_items(youtube):
+def _execute(request):
+    return request.execute(num_retries=5)
+
+def _list_playlist_b_items_once(youtube):
     items = {}
     page_token = None
     while True:
-        response = youtube.playlistItems().list(
+        response = _execute(youtube.playlistItems().list(
             part="contentDetails",
             playlistId=PLAYLIST_B_ID,
             maxResults=50,
             pageToken=page_token,
-        ).execute()
+        ))
         for item in response["items"]:
             items[item["contentDetails"]["videoId"]] = item["id"]
         page_token = response.get("nextPageToken")
@@ -127,8 +131,18 @@ def list_playlist_b_items(youtube):
             break
     return items
 
+def list_playlist_b_items(youtube):
+    # page tokens occasionally 404 mid-listing, so restart from the first page
+    for attempt in range(3):
+        try:
+            return _list_playlist_b_items_once(youtube)
+        except HttpError as e:
+            if e.resp.status != 404 or attempt == 2:
+                raise
+            time.sleep(2)
+
 def add_to_playlist_b(youtube, video_id):
-    response = youtube.playlistItems().insert(
+    response = _execute(youtube.playlistItems().insert(
         part="snippet",
         body={
             "snippet": {
@@ -136,11 +150,11 @@ def add_to_playlist_b(youtube, video_id):
                 "resourceId": {"kind": "youtube#video", "videoId": video_id},
             }
         },
-    ).execute()
+    ))
     return response["id"]
 
 def remove_from_playlist_b(youtube, playlist_item_id):
-    youtube.playlistItems().delete(id=playlist_item_id).execute()
+    _execute(youtube.playlistItems().delete(id=playlist_item_id))
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -157,11 +171,13 @@ def sync_once(youtube, state):
     now = datetime.datetime.now(datetime.timezone.utc)
     a_ids = set(fetch_playlist_video_ids(PLAYLIST_A_ID))
     b_items = list_playlist_b_items(youtube)
+    print(f"cycle: A={len(a_ids)} B={len(b_items)} missing_from_B={len(a_ids - set(b_items))} tracked={len(state)}", flush=True)
 
     for video_id in a_ids:
         if video_id not in b_items and video_id not in state:
             playlist_item_id = add_to_playlist_b(youtube, video_id)
             state[video_id] = {"added_at": now.isoformat(), "playlist_item_id": playlist_item_id}
+            save_state(state)
             print(f"added {video_id} to B", flush=True)
 
     for video_id in list(state):
@@ -175,6 +191,7 @@ def sync_once(youtube, state):
             remove_from_playlist_b(youtube, playlist_item_id)
             print(f"removed {video_id} from B, only lasted {age_hours:.1f}h in A", flush=True)
         del state[video_id]
+        save_state(state)
 
     for video_id in list(state):
         entry = state[video_id]
@@ -185,12 +202,21 @@ def sync_once(youtube, state):
 
     save_state(state)
 
-youtube = build("youtube", "v3", credentials=load_credentials())
+def make_client():
+    return build("youtube", "v3", credentials=load_credentials())
+
+youtube = make_client()
 state = load_state()
+print(f"started, polling every {POLL_INTERVAL_SECONDS}s", flush=True)
 
 while True:
     try:
         sync_once(youtube, state)
     except Exception as e:
         print(f"sync failed: {e}", flush=True)
+        # stale connections (e.g. broken pipe) are fixed by a fresh client
+        try:
+            youtube = make_client()
+        except Exception as e:
+            print(f"client rebuild failed: {e}", flush=True)
     time.sleep(POLL_INTERVAL_SECONDS)
