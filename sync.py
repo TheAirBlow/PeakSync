@@ -77,29 +77,39 @@ def fetch_playlist_video_ids(playlist_id):
 
     video_ids = []
     contents = shelf["contents"]
-    continuation = shelf.get("continuations")
+    legacy = shelf.get("continuations")
+    token = legacy[0]["nextContinuationData"]["continuation"] if legacy else None
 
     while True:
         for entry in contents:
             item = entry.get("musicResponsiveListItemRenderer")
             if item is None:
+                cont = entry.get("continuationItemRenderer")
+                if cont:
+                    token = cont["continuationEndpoint"]["continuationCommand"]["token"]
                 continue
             video_id = item.get("playlistItemData", {}).get("videoId")
             if video_id:
                 video_ids.append(video_id)
 
-        if not continuation:
+        if not token:
             break
 
-        ctoken = continuation[0]["nextContinuationData"]["continuation"]
         data = _ytm_post(
             "browse",
-            {"context": CONTEXT},
-            params={"ctoken": ctoken, "continuation": ctoken, "type": "next"},
+            {"context": CONTEXT, "continuation": token},
+            params={"ctoken": token, "continuation": token, "type": "next"},
         )
-        continuation_contents = data.get("continuationContents", {}).get("musicPlaylistShelfContinuation", {})
-        contents = continuation_contents.get("contents", [])
-        continuation = continuation_contents.get("continuations")
+        token = None
+        actions = data.get("onResponseReceivedActions")
+        if actions:
+            contents = actions[0]["appendContinuationItemsAction"]["continuationItems"]
+        else:
+            legacy_contents = data.get("continuationContents", {}).get("musicPlaylistShelfContinuation", {})
+            contents = legacy_contents.get("contents", [])
+            legacy = legacy_contents.get("continuations")
+            if legacy:
+                token = legacy[0]["nextContinuationData"]["continuation"]
 
     return video_ids
 
